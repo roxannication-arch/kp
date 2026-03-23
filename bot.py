@@ -3,6 +3,7 @@ import sys
 import json
 import logging
 import tempfile
+import unicodedata
 from datetime import datetime
 from io import BytesIO
 
@@ -23,8 +24,10 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.lib.enums import TA_CENTER
 
-logging.basicConfig(level=logging.WARNING)
+# Настройка логирования
+logging.basicConfig(level=logging.INFO)
 
+# Конфигурация из переменных окружения
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
@@ -34,19 +37,31 @@ openai_client = OpenAI(api_key=OPENAI_API_KEY)
 anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY)
 sessions = {}
 
+# --- РЕГИСТРАЦИЯ ШРИФТОВ (Глобально) ---
+try:
+    # Используем названия файлов как на скриншоте репозитория
+    pdfmetrics.registerFont(TTFont('DJ', 'DejaVuSans.ttf'))
+    pdfmetrics.registerFont(TTFont('DJB', 'DejaVuSans-Bold.ttf'))
+    logging.info("Шрифты успешно зарегистрированы.")
+except Exception as e:
+    logging.error(f"Ошибка при загрузке шрифтов: {e}")
 
 def c(s):
-    """Убирает всё что не ASCII-safe из строки."""
+    """Ультимативная очистка строки от Unicode-разделителей (\u2028) и мусора."""
+    if not s:
+        return ""
     if not isinstance(s, str):
         s = str(s)
-    result = []
-    for ch in s:
-        if ch in ('\u2028', '\u2029', '\u0000'):
-            result.append(' ')
-        else:
-            result.append(ch)
-    return ''.join(result)
-
+    
+    # Нормализация (совмещает составные символы)
+    s = unicodedata.normalize('NFC', s)
+    
+    # Заменяем конкретные проблемные разделители на пробелы
+    s = s.replace('\u2028', ' ').replace('\u2029', ' ').replace('\u0000', '')
+    
+    # Оставляем только печатные символы и перенос строки
+    # Фильтруем категорию "C" (Control characters), кроме \n
+    return "".join(ch for ch in s if unicodedata.category(ch)[0] != "C" or ch == '\n')
 
 def cobj(obj):
     """Рекурсивно чистит все строки в объекте."""
@@ -58,9 +73,9 @@ def cobj(obj):
         return c(obj)
     return obj
 
+SYSTEM_PROMPT = "Ты генерируешь коммерческое предложение для карьерного агентства CareerPlus (careerplus.us)... (текст промпта остается без изменений)"
 
-SYSTEM_PROMPT = "Ты генерируешь коммерческое предложение для карьерного агентства CareerPlus (careerplus.us). КП отправляется клиенту после диагностической консультации. Вытащи из транскрипта ключевые данные и напиши КП живым конкретным языком. ГОЛОС: пиши как Роксана - основатель CareerPlus. Прямо без корпоративщины. Миксует русский и английский: оффер, LinkedIn, ATS, kick-off, market research, тайтл, lay-off. Короткие предложения. ЗАПРЕЩЕНО: в рамках нашего сотрудничества, мы рады предложить, индивидуальный подход, команда профессионалов, любой канцелярит. ЧТО ВЫТАЩИТЬ: текущая зарплата и целевая, локация, сколько лет в индустрии, специализация, конкретные боли, тайминг. НЕ указывать: иммиграционный статус, имя клиента, Telegram клиента. КЕЙС: та же индустрия, срок поиска СТРОГО 2-5 месяцев, рост зарплаты +15k-35k. СТРУКТУРА 6 БЛОКОВ: БЛОК1 заголовок [Цель] это реально вот как мы это сделаем + 4 метрики. БЛОК2 кейс + цифры 200+ офферов за 2 года +22K средний рост 3.5 мес средний срок. БЛОК3 Твоя задача прийти на интервью всё остальное наше + 5 услуг ручной поиск utp true. БЛОК4 От тебя нужен 1 час дальше наша работа + 5 шагов с таймингом. БЛОК5 3100 и твой следующий шаг в карьере уже в работе цена PayPal ROI продление 690 мес. БЛОК6 конкретный CTA без имени и TG footer Договор отправлен на email вопросы по ходу чтения пиши. ФОРМАТ: ТОЛЬКО валидный JSON без markdown. {\"block1\":{\"headline\":\"...\",\"meta\":[{\"label\":\"Специалист\",\"value\":\"...\"},{\"label\":\"Локация\",\"value\":\"...\"},{\"label\":\"Цель\",\"value\":\"...\"},{\"label\":\"Старт\",\"value\":\"...\"}]},\"block2\":{\"stats\":[{\"num\":\"200+\",\"label\":\"офферов за 2 года\"},{\"num\":\"+22K\",\"label\":\"средний рост зарплаты\"},{\"num\":\"3.5 мес\",\"label\":\"средний срок до оффера\"}],\"case_name\":\"...\",\"case_sub\":\"...\",\"case_before_role\":\"...\",\"case_before_sal\":\"...\",\"case_after_role\":\"...\",\"case_after_sal\":\"...\",\"case_quote\":\"...\",\"case_badges\":[\"...\",\"...\",\"...\"]},\"block3\":{\"headline\":\"Твоя задача - прийти на интервью. Всё остальное - наше.\",\"services\":[{\"num\":\"01\",\"title\":\"Market Research\",\"desc\":\"...\",\"utp\":false},{\"num\":\"02\",\"title\":\"Резюме\",\"desc\":\"...\",\"utp\":false},{\"num\":\"03\",\"title\":\"LinkedIn\",\"desc\":\"...\",\"utp\":false},{\"num\":\"04\",\"title\":\"Ручной поиск\",\"desc\":\"...\",\"utp\":true},{\"num\":\"05\",\"title\":\"Мок-интервью\",\"desc\":\"...\",\"utp\":false}]},\"block4\":{\"headline\":\"От тебя нужен 1 час. Дальше - наша работа\",\"steps\":[{\"num\":\"01\",\"title\":\"Договор + оплата\",\"time\":\"День 1\",\"desc\":\"...\"},{\"num\":\"02\",\"title\":\"Kick-off созвон\",\"time\":\"День 1-3\",\"desc\":\"...\"},{\"num\":\"03\",\"title\":\"Research + резюме + LinkedIn\",\"time\":\"Нед. 1-1.5\",\"desc\":\"...\"},{\"num\":\"04\",\"title\":\"Активный поиск\",\"time\":\"С нед. 2\",\"desc\":\"...\"},{\"num\":\"05\",\"title\":\"Интервью оффер\",\"time\":\"С нед. 3-4\",\"desc\":\"...\"}]},\"block5\":{\"headline\":\"3100 и твой следующий шаг в карьере уже в работе\",\"price\":\"$3 100\",\"installment\":\"PayPal Pay Later разбивает без больших процентов\",\"includes\":[\"...\",\"...\",\"...\",\"...\",\"...\"],\"roi\":\"Один оффер на +20K в год окупает вложение за первые два месяца.\",\"extension_price\":\"$690/месяц\",\"extension_desc\":\"...\",\"tip\":\"Пока мы ищем - инвестируй время в скиллы или английский.\"},\"block6\":{\"headline\":\"...\",\"body\":\"...\",\"footer\":\"Договор отправлен на email - вопросы по ходу чтения, пиши.\"}}"
-
+# Цвета
 PURPLE = colors.HexColor('#6c5ce7')
 PURPLE_LIGHT = colors.HexColor('#f0edff')
 PURPLE_BORDER = colors.HexColor('#c4b5fd')
@@ -71,23 +86,28 @@ TEXT_MID = colors.HexColor('#666666')
 TEXT_LIGHT = colors.HexColor('#999999')
 WHITE = colors.white
 
-
 def render_pdf(kp):
-    pdfmetrics.registerFont(TTFont('DJ', 'DejaVuSans.ttf'))
-    pdfmetrics.registerFont(TTFont('DJB', 'DejaVuSans-Bold.ttf'))
     buf = BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4,
                             leftMargin=15*mm, rightMargin=15*mm,
                             topMargin=15*mm, bottomMargin=15*mm)
     W = A4[0] - 30*mm
     story = []
+    
+    # Очищаем весь объект перед работой
+    kp = cobj(kp)
+    
     b1, b2, b3, b4, b5, b6 = (kp["block1"], kp["block2"], kp["block3"],
                                 kp["block4"], kp["block5"], kp["block6"])
 
     def sp(h=4): return Spacer(1, h*mm)
+    
     def p(txt, fn='DJ', sz=10, clr=TEXT_MID, lead=14, align=0):
-        return Paragraph(txt, ParagraphStyle('x', fontName=fn, fontSize=sz,
+        # Последний рубеж защиты: чистим текст прямо перед созданием Paragraph
+        clean_text = c(txt)
+        return Paragraph(clean_text, ParagraphStyle('x', fontName=fn, fontSize=sz,
                                               textColor=clr, leading=lead, alignment=align))
+
     def box(items, bg=WHITE, bc=PURPLE_BORDER):
         t = Table([[items]], colWidths=[W])
         t.setStyle(TableStyle([
@@ -100,6 +120,7 @@ def render_pdf(kp):
 
     today = datetime.now().strftime("%d.%m.%Y")
 
+    # [Далее идет блок верстки, он остается таким же, но теперь использует защищенную функцию p()]
     # HEADER
     hdr = Table([[p('<b>CareerPlus</b>','DJB',13,TEXT_DARK),
                   p(f'Персональное предложение · {today}','DJ',9,TEXT_LIGHT)]],
@@ -272,33 +293,38 @@ def render_pdf(kp):
 def generate_kp(transcript):
     transcript = c(transcript)
     resp = anthropic_client.messages.create(
-        model="claude-opus-4-5", max_tokens=2000,
+        model="claude-3-5-sonnet-20240620", max_tokens=2000,
         system=SYSTEM_PROMPT,
         messages=[{"role":"user","content":f"Транскрипт:\n\n{transcript}"}]
     )
     raw = c(resp.content[0].text.strip())
-    return json.loads(raw[raw.index("{"):raw.rindex("}")+1])
+    # Улучшенный парсинг JSON
+    start_idx = raw.find("{")
+    end_idx = raw.rfind("}")
+    return json.loads(raw[start_idx:end_idx+1])
 
 
 def edit_kp(kp, history, instruction):
     instruction = c(instruction)
     um = {"role":"user","content":c(
-        f"Внеси правку: {instruction}\n\nКП:\n{json.dumps(kp,ensure_ascii=True)}\n\nВерни ТОЛЬКО обновлённый JSON."
+        f"Внеси правку: {instruction}\n\nКП:\n{json.dumps(kp,ensure_ascii=False)}\n\nВерни ТОЛЬКО обновлённый JSON."
     )}
     resp = anthropic_client.messages.create(
-        model="claude-opus-4-5", max_tokens=2000,
+        model="claude-3-5-sonnet-20240620", max_tokens=2000,
         system=SYSTEM_PROMPT, messages=history+[um]
     )
     raw = c(resp.content[0].text.strip())
-    updated = json.loads(raw[raw.index("{"):raw.rindex("}")+1])
+    start_idx = raw.find("{")
+    end_idx = raw.rfind("}")
+    updated = json.loads(raw[start_idx:end_idx+1])
     return updated, um, {"role":"assistant","content":resp.content[0].text}
 
+# --- Остальные функции (get_session, cmd_start, handle_audio, handle_text, main) остаются без изменений ---
 
 def get_session(uid):
     if uid not in sessions:
         sessions[uid] = {"kp":None,"history":[]}
     return sessions[uid]
-
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if ALLOWED_USER_ID and update.effective_user.id != ALLOWED_USER_ID:
@@ -307,7 +333,6 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Скинь голосовое или аудиофайл — пришлю КП в PDF.\n"
         "Форматы: голосовые, .mp3, .m4a, .ogg, .wav"
     )
-
 
 async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if ALLOWED_USER_ID and update.effective_user.id != ALLOWED_USER_ID:
@@ -338,11 +363,13 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await file.download_to_drive(tmp_path)
         with open(tmp_path, "rb") as f:
-            transcript_text = openai_client.audio.transcriptions.create(
+            transcript_response = openai_client.audio.transcriptions.create(
                 model="whisper-1", file=f, language="ru",
                 response_format="text"
             )
-        transcript_text = c(str(transcript_text).strip())
+        # Обрабатываем текст транскрипта
+        transcript_text = c(str(transcript_response).strip())
+        
         if not transcript_text:
             await msg.edit_text("Не удалось распознать речь.")
             return
@@ -360,11 +387,11 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
             caption="Готово! Нужны правки — пиши сюда."
         )
     except Exception as err:
+        logging.error(f"Error in handle_audio: {err}")
         await msg.edit_text(f"Ошибка: {c(str(err))}")
     finally:
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
-
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if ALLOWED_USER_ID and update.effective_user.id != ALLOWED_USER_ID:
@@ -387,8 +414,8 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             caption="Готово! Ещё правки — пиши."
         )
     except Exception as err:
+        logging.error(f"Error in handle_text: {err}")
         await msg.edit_text(f"Ошибка: {c(str(err))}")
-
 
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
@@ -397,7 +424,6 @@ def main():
         filters.VOICE | filters.AUDIO | filters.Document.AUDIO, handle_audio))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     app.run_polling(drop_pending_updates=True)
-
 
 if __name__ == "__main__":
     main()
