@@ -1,0 +1,10 @@
+meta:
+  environment: python
+  toolchain:
+    name: pip
+    version: 3.11
+build:
+  commands:
+    - pip install -r requirements.txt
+run:
+  command: python bot.py
