@@ -121,13 +121,20 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("Слушаю аудио...")
     file = await (update.message.voice or update.message.audio).get_file()
     
-    with tempfile.NamedTemporaryFile(suffix='.mp3', delete=False) as tmp:
-        await file.download_to_drive(tmp.name)
-        with open(tmp.name, "rb") as f:
-            transcript = openai_client.audio.transcriptions.create(model="whisper-1", file=f, response_format="text")
-        os.unlink(tmp.name)
-
+    # Используем фиксированное имя файла без спецсимволов
+    tmp_path = os.path.join(tempfile.gettempdir(), f"audio_{update.effective_user.id}.mp3")
+    
     try:
+        await file.download_to_drive(tmp_path)
+        
+        # Открываем файл и передаем его Whisper с чистым именем 'file.mp3'
+        with open(tmp_path, "rb") as f:
+            transcript = openai_client.audio.transcriptions.create(
+                model="whisper-1", 
+                file=("file.mp3", f), # Явно задаем имя здесь!
+                response_format="text"
+            )
+
         await msg.edit_text("Генерирую структуру...")
         kp_raw = generate_kp(transcript)
         kp = cobj(kp_raw)
@@ -137,8 +144,13 @@ async def handle_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await update.message.reply_document(document=pdf, filename="Proposal.pdf")
         await msg.delete()
+
     except Exception as e:
+        logging.error(f"Ошибка в handle_audio: {e}")
         await msg.edit_text(f"Произошла ошибка: {str(e)}")
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
 
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
