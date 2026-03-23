@@ -1,0 +1,2 @@
+[start]
+cmd = "python -X utf8 bot.py"

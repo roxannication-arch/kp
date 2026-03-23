@@ -1,0 +1,4 @@
+python-telegram-bot==21.3
+openai==1.35.3
+anthropic==0.28.0
+reportlab==4.2.2
